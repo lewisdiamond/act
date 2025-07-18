@@ -46,9 +46,12 @@ impl Account {
         self.held
     }
     pub fn hold(&mut self, amnt: u64) -> Result<i64> {
+        let current_held = self.held;
         if let Some(held) = self.held.checked_add(amnt) {
             self.held = held;
-            self.available()
+            self.available().inspect_err(|_| {
+                self.held = current_held; // Rollback if available fails
+            })
         } else {
             Err(anyhow!(
                 "Overflow on hold. Current held: {}, Amount to hold: {}",
@@ -239,5 +242,40 @@ mod tests {
             .expect_err("Withdraw should fail due to insufficient balance");
         assert_eq!(account.total(), 0);
         assert_eq!(account.held(), 0);
+    }
+
+    #[test]
+    fn test_limit_values() {
+        let mut account = Account::new(999);
+        let balance = account
+            .deposit(i64::MAX as u64)
+            .expect("Max deposit should succeed");
+        assert_eq!(balance, i64::MAX);
+        account
+            .deposit(1)
+            .expect_err("Above max deposit should fail");
+        assert_eq!(
+            account.available().expect("Balance not available"),
+            i64::MAX
+        );
+        let balance = account.hold(u64::MAX).expect("Holding max should succeed");
+        assert_eq!(balance, i64::MIN);
+        account.hold(1).expect_err("Holding beyong max should fail");
+        assert_eq!(
+            account.available().expect("Balance not available"),
+            i64::MIN
+        );
+        let balance = account
+            .unhold(u64::MAX)
+            .expect("Holding to zero should succeed");
+        assert_eq!(balance, i64::MAX);
+        account.withdraw(1).expect("Withdraw 1 should succeed");
+        account
+            .hold(u64::MAX)
+            .expect_err("Holding beyong max should fail");
+        assert_eq!(
+            account.available().expect("Balance not available"),
+            i64::MAX - 1
+        );
     }
 }
